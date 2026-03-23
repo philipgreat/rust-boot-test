@@ -21,6 +21,8 @@ Current implementation in [`src/main.rs`](/Users/Philip/githome/rust-boot-test/s
 
 - UEFI direct entry
 - explicit stack handoff in [`src/boot.s`](/Users/Philip/githome/rust-boot-test/src/boot.s)
+- largest available UEFI text mode for big console output
+- console input echo before entering the runtime stage
 - `x86_64` long mode runtime
 - interrupts disabled after boot services exit
 - minimal identity paging with `2MiB` huge pages
@@ -52,6 +54,17 @@ Headless verification:
 ```bash
 HEADLESS=1 ./scripts/test-qemu.sh
 ```
+
+Headless logs are written to:
+
+- [`build/debugcon.log`](/Users/Philip/githome/rust-boot-test/build/debugcon.log)
+
+Interactive boot:
+
+- the firmware console switches to the largest available text mode
+- keyboard input is echoed to the console
+- pressing `Enter` continues into the runtime
+- if no input arrives, runtime starts automatically after a short poll window
 
 ## Dependencies
 

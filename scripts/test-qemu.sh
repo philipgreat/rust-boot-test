@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 ESP_DIR="$BUILD_DIR/esp"
+DEBUG_LOG="$BUILD_DIR/debugcon.log"
 OVMF_CODE_CANDIDATES=(
     "/usr/local/share/qemu/edk2-x86_64-code.fd"
     "/usr/share/OVMF/OVMF_CODE.fd"
@@ -54,7 +55,14 @@ QEMU_ARGS=(
 )
 
 if [[ "${HEADLESS:-0}" == "1" ]]; then
-    exec qemu-system-x86_64 "${QEMU_ARGS[@]}" -display none -serial none -debugcon stdio
+    rm -f "$DEBUG_LOG"
+    exec qemu-system-x86_64 \
+        "${QEMU_ARGS[@]}" \
+        -display none \
+        -serial none \
+        -monitor none \
+        -chardev "file,id=dbg,path=$DEBUG_LOG" \
+        -device isa-debugcon,iobase=0xe9,chardev=dbg
 fi
 
 exec qemu-system-x86_64 "${QEMU_ARGS[@]}"

@@ -17,6 +17,8 @@ type EfiMemoryType = u32;
 type EfiAllocateType = u32;
 
 const EFI_SUCCESS: EfiStatus = 0;
+const EFI_ERROR_BIT: EfiStatus = 1usize << (usize::BITS as usize - 1);
+const EFI_NOT_READY: EfiStatus = EFI_ERROR_BIT | 6;
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_WRITABLE: u64 = 1 << 1;
 const PAGE_LARGE: u64 = 1 << 7;
@@ -38,6 +40,39 @@ struct EfiTableHeader {
 struct EfiSimpleTextOutputProtocol {
     reset: usize,
     output_string: extern "efiapi" fn(*mut EfiSimpleTextOutputProtocol, *const u16) -> EfiStatus,
+    test_string: usize,
+    query_mode:
+        extern "efiapi" fn(*mut EfiSimpleTextOutputProtocol, usize, *mut usize, *mut usize) -> EfiStatus,
+    set_mode: extern "efiapi" fn(*mut EfiSimpleTextOutputProtocol, usize) -> EfiStatus,
+    set_attribute: usize,
+    clear_screen: extern "efiapi" fn(*mut EfiSimpleTextOutputProtocol) -> EfiStatus,
+    set_cursor_position: usize,
+    enable_cursor: usize,
+    mode: *mut EfiSimpleTextOutputMode,
+}
+
+#[repr(C)]
+struct EfiSimpleTextOutputMode {
+    max_mode: i32,
+    mode: i32,
+    attribute: i32,
+    cursor_column: i32,
+    cursor_row: i32,
+    cursor_visible: bool,
+}
+
+#[repr(C)]
+struct EfiSimpleTextInputProtocol {
+    reset: usize,
+    read_key_stroke:
+        extern "efiapi" fn(*mut EfiSimpleTextInputProtocol, *mut EfiInputKey) -> EfiStatus,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct EfiInputKey {
+    scan_code: u16,
+    unicode_char: u16,
 }
 
 #[repr(C)]
@@ -89,7 +124,7 @@ struct EfiSystemTable {
     firmware_vendor: *const u16,
     firmware_revision: u32,
     console_in_handle: EfiHandle,
-    con_in: *mut c_void,
+    con_in: *mut EfiSimpleTextInputProtocol,
     console_out_handle: EfiHandle,
     con_out: *mut EfiSimpleTextOutputProtocol,
     standard_error_handle: EfiHandle,
@@ -124,11 +159,31 @@ extern "efiapi" fn rust_efi_main(image_handle: EfiHandle, system_table: *mut Efi
     let mut console = ConsoleWriter::new(system_table);
     let mut debug = DebugCon;
 
+    configure_largest_text_mode(system_table);
+    let _ = writeln!(console, "");
+    let _ = writeln!(console, "========== Lighting Bare Metal Machine ==========");
+    let _ = writeln!(console, "");
+
+    let _ = writeln!(console, " _      _       _     _   _ _   _  ____ ");
+    let _ = writeln!(console, "| |    (_)     | |   | | (_) | | |/ __ \\");
+    let _ = writeln!(console, "| |     _  __ _| |__ | |_ _| |_| | |  | |");
+    let _ = writeln!(console, "| |    | |/ _` | '_ \\| __| | __| | |  | |");
+    let _ = writeln!(console, "| |____| | (_| | | | | |_| | |_| | |__| |");
+    let _ = writeln!(console, "|______|_|\\__, |_| |_|\\__|_|\\__|_|\\____/ ");
+    let _ = writeln!(console, "            __/ |                         ");
+    let _ = writeln!(console, "           |___/                          ");
+
+    let _ = writeln!(console);
     let _ = writeln!(console, "x86_64 bare metal runtime stage1");
-    let _ = writeln!(console, "uefi direct load");
+    let _ = writeln!(console, "UEFI direct load");
+    let _ = writeln!(console, "console input is echoed below");
+    // let _ = writeln!(console, "press Enter to continue into runtime");
+    let _ = writeln!(console);
     let _ = writeln!(debug, "x86_64 bare metal runtime stage1");
-    let _ = writeln!(debug, "uefi direct load");
+    let _ = writeln!(debug, "UEFI direct load");
     let _ = writeln!(debug, "phase=boot_services");
+
+    //mirror_console_input(system_table);
 
     let boot_services = unsafe { (*system_table).boot_services };
     let (memory_top, descriptor_count) = match exit_boot_services(image_handle, boot_services) {
@@ -140,7 +195,7 @@ extern "efiapi" fn rust_efi_main(image_handle: EfiHandle, system_table: *mut Efi
         }
     };
 
-    let _ = writeln!(debug, "phase=after_exit_boot_services");
+    let _ = writeln!(console, "phase=after_exit_boot_services");
     disable_interrupts();
     let _ = writeln!(console, "phase=interrupts_disabled");
 
@@ -292,6 +347,90 @@ fn warmup() {
     }
 }
 
+fn configure_largest_text_mode(system_table: *mut EfiSystemTable) {
+    let con_out = unsafe { (*system_table).con_out };
+    if con_out.is_null() {
+        return;
+    }
+
+    let mode = unsafe { (*con_out).mode };
+    if mode.is_null() {
+        return;
+    }
+
+    let max_mode = unsafe { (*mode).max_mode };
+    if max_mode <= 0 {
+        return;
+    }
+
+    let mut best_mode = 0usize;
+    let mut best_area = usize::MAX;
+
+    for candidate in 0..max_mode as usize {
+        let mut cols = 0usize;
+        let mut rows = 0usize;
+        let status = unsafe { ((*con_out).query_mode)(con_out, candidate, &mut cols, &mut rows) };
+        if status != EFI_SUCCESS || cols == 0 || rows == 0 {
+            continue;
+        }
+
+        let area = cols.saturating_mul(rows);
+        if area < best_area {
+            best_area = area;
+            best_mode = candidate;
+        }
+    }
+
+    let _ = unsafe { ((*con_out).set_mode)(con_out, best_mode) };
+    let _ = unsafe { ((*con_out).clear_screen)(con_out) };
+}
+
+fn mirror_console_input(system_table: *mut EfiSystemTable) {
+    let con_in = unsafe { (*system_table).con_in };
+    if con_in.is_null() {
+        return;
+    }
+
+    let mut console = ConsoleWriter::new(system_table);
+    let mut key = EfiInputKey {
+        scan_code: 0,
+        unicode_char: 0,
+    };
+    let mut idle_spins = 0u64;
+
+    loop {
+        let status = unsafe { ((*con_in).read_key_stroke)(con_in, &mut key) };
+        if status == EFI_NOT_READY {
+            idle_spins = idle_spins.wrapping_add(1);
+            if idle_spins >= 50_000_000 {
+                let _ = writeln!(console);
+                let _ = writeln!(console, "[no console input detected, entering runtime]");
+                break;
+            }
+            core::hint::spin_loop();
+            continue;
+        }
+
+        idle_spins = 0;
+
+        if status != EFI_SUCCESS {
+            let _ = writeln!(console, "[input error {status:#x}]");
+            break;
+        }
+
+        if key.unicode_char == b'\r' as u16 {
+            let _ = writeln!(console);
+            break;
+        }
+
+        if key.unicode_char != 0 {
+            let _ = console.write_utf16_char(key.unicode_char);
+        } else {
+            let _ = write!(console, "[scan={:#04x}]", key.scan_code);
+        }
+    }
+}
+
 fn runtime_loop(mapped_gib: usize, memory_top: u64, has_rdtscp: bool) -> ! {
     let mut debug = DebugCon;
     let mut last: u64;
@@ -416,6 +555,19 @@ struct ConsoleWriter {
 impl ConsoleWriter {
     const fn new(system_table: *mut EfiSystemTable) -> Self {
         Self { system_table }
+    }
+
+    fn write_utf16_char(&mut self, ch: u16) -> fmt::Result {
+        let con_out = unsafe { (*self.system_table).con_out };
+        if con_out.is_null() {
+            return Ok(());
+        }
+
+        let buffer = [ch, 0];
+        unsafe {
+            ((*con_out).output_string)(con_out, buffer.as_ptr());
+        }
+        Ok(())
     }
 }
 

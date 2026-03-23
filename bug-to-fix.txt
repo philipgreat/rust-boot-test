@@ -1,0 +1,4 @@
+
+~/githome/rust-boot-test (main) $ ./scripts/test-qemu.sh
+qemu-system-i386: Error loading uncompressed kernel without PVH ELF Note
+
